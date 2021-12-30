@@ -3,6 +3,19 @@ pacman::p_load(tidyverse, raster, ncdf4, docstring,
                fs, maps, USAboundaries, sf, rnaturalearth)
 
 fmt_lat_lon <- function(lats, lons){
+  #' Format latitude and longitude data.
+  #'
+  #' @description Format latitude and longitude data to use
+  #' in `wgrib2` reprojection
+  #' 
+  #' @param lats Vector c(min, max, res). A vector of minimum
+  #' and maximum latitudes, along with resolution. 
+  #' @param lons Vector c(min, max, res). A vector of minimum
+  #' and maximum longitudes, along with resolution.
+  #' 
+  #' @return A string of the lat-lon projection to use in
+  #' `wgrib2`
+  
   latlon_info <- sprintf("%d:%d:%.2f %d:%d:%.2f",
                          lons[1],
                          as.integer((lons[2]-lons[1])/lons[3]),
@@ -16,6 +29,26 @@ fmt_lat_lon <- function(lats, lons){
 
 download_and_clean <- function(url, lats, lons, fname,
                                loader, var_regex){
+  #' Download and format data from a specific url.
+  #' 
+  #' @description Download and format GRIB data from a 
+  #' specific url into a data.frame containing raster data.
+  #' 
+  #' @param url String. A url to download GRIB data from.
+  #' @param lats Vector c(min, max, res). A vector of minimum
+  #' and maximum latitudes, along with resolution. 
+  #' @param lons Vector c(min, max, res). A vector of minimum
+  #' and maximum longitudes, along with resolution.
+  #' @param fname String. The filename to save the NetCDF file as.
+  #' @param loader Function(path_to_file). A function that 
+  #' takes a path to a NetCDF files and returns a data.frame of
+  #' the the raster data in that file
+  #' @param var_regex String. A regex to filter variables
+  #' in the grib file, by filtering the output of `wgrib2`
+  #' 
+  #' @return A data.frame of raster data downloaded
+  #' and converted from the URL.
+  
   cache_dir <- file.path(path_home_r(),".track_data")
   dir.create(cache_dir, showWarnings=FALSE)
   nc_file_path <- file.path(cache_dir, fname)
@@ -46,6 +79,18 @@ download_and_clean <- function(url, lats, lons, fname,
 }
 
 get_raster.gfs <- function(my_date, my_hour){
+  #' Get raster from GFS
+  #' 
+  #' @description Get raster data in a data.frame from
+  #' the GFS model at a specificed date an hour
+  #' from the NOAA archive.
+  #'
+  #' @param my_date Date to retrieve model from.
+  #' @param my_hour Hour to retrieve model frm.
+  #'
+  #' @return A data.frame of the raster grabbed from the model
+  #' with MSLP, 500mb wind U and V directions, and 10m wind speed.
+  
   # https://www.ncei.noaa.gov/data/global-forecast-system/access/grid-004-0.5-degree/analysis/201008/20100809/gfs_4_20100809_0000_000.grb2
   base_url <- "https://www.ncei.noaa.gov/data/global-forecast-system/access/grid-004-0.5-degree/analysis/"
   fmt_str <- paste0(base_url,
@@ -76,7 +121,6 @@ get_raster.gfs <- function(my_date, my_hour){
     raster_df <- as.data.frame(rasterToPoints(r))
     colnames(raster_df) <- 
       c("x","y","MSLP","U10","V10","U500","V500")
-    #print(raster_df %>% head())
     raster_df <- raster_df %>%
       mutate(Wind = sqrt(U10^2 + V10^2)) %>%
       dplyr::select(-U10,-V10)
@@ -111,7 +155,6 @@ get_raster.hrrr <- function(my_date, my_hour){
   lats <- c(20, 60, 0.25)
   url <- sprintf(fmt_str, date_str, my_hour)
   fname <- sprintf(file_fmt_str, date_str, my_hour)
-  #"-130:130:0.5 25:50:0.5"
 
   # Create loader callback function
   load_raster <- function(fpath){
@@ -133,6 +176,19 @@ get_raster.hrrr <- function(my_date, my_hour){
 }
 
 get_raster <- function(my_date, my_hour, model="hrrr"){
+  #' Get raster data from weather models.
+  #' 
+  #' @description Get raster for a specific date and time from
+  #' a specficic weather model.
+  #' 
+  #' @param my_date Date. Date to get raster data from.
+  #' @param my_hour Integer. Hour to get raster data from.
+  #' @param model String. Model to get raster data from.
+  #' Options are "hrrr" and "gfs". Defaults to "hrrr".
+  #' 
+  #' @returns A data.frame of raster data from the model at
+  #' the specified date and time.
+
   if(model == "gfs"){
     return(get_raster.gfs(my_date, my_hour))
   }
@@ -148,7 +204,7 @@ get_track <- function(min_date, max_date, min_time = 0,
                       min_dot = -1, max_dist = 10,
                       filter_callback = NULL,
                       timestep = 6){
-  #' Get track of low-pressure area
+  #' Get track of low-pressure area.
   #'
   #' @description This function gets 
   #' the track of a low-pressure system from HRRR
@@ -234,7 +290,6 @@ get_track <- function(min_date, max_date, min_time = 0,
         if(!is.null(filter_callback)){
           raster_df <- raster_df %>%
             filter(filter_callback(., lat_last, lon_last))
-          #print(raster_df %>% head())
         }
         # Check if low position is within
         # an acceptable range according to degree
@@ -316,6 +371,19 @@ get_track <- function(min_date, max_date, min_time = 0,
 
 # Plot the track from data frame
 plot_track <- function(track_df, scale='p'){
+  #' Plot the low pressure track
+  #'
+  #' @description Get a ggplot object of the low track on a map
+  #' of North America.
+  #'
+  #' @param track_df Data.frame. A data frame with low positions,
+  #' generated by get_track()
+  #' @param scale String. A string with which scale to use on the plot.
+  #' Options are 'p' (pressure scale), 'ss' (Saffir-Simpson wind scale),
+  #' and 'day' to show the day of the track.
+  #' 
+  #' @return A ggplot object of the graph.
+
   states <- us_states() %>%
     filter(!(state_abbr %in% c("AK","HI")))
   world <- ne_countries(returnclass='sf')
@@ -336,9 +404,7 @@ plot_track <- function(track_df, scale='p'){
   return(my_plot)
 }
 
-# tdf <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),min_time=12, center=c(43.97,-120.59),max_dist=8,filter_callback=function(df,y,x)(df$x>(x-0.3)),center_radius=2,timestep=6)
-# plot_track(tdf,scale='day')
-
+# Example code
 if(FALSE){
 tdf <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),
 model='gfs',min_time = 12, center=c(44, -120),
