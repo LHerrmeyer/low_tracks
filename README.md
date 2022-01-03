@@ -7,6 +7,9 @@ can also plot the paths using ggplot. The tool requires pacman to load packages.
 
 ## Done
 - Docstring documentation
-- 
+- Add graphic
+- Add low track data
+- Add GFS
+- Add HRRR
 ## To-Do
 - Add examples
