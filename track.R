@@ -106,8 +106,8 @@ get_raster.gfs <- function(my_date, my_hour){
   fname <- sprintf(file_fmt_str, date_str, my_hour)
   
   var_regex = "GRD:500|GRD:10 m above|PRMSL"
-  lons <- c(-140, -60, 0.5)
-  lats <- c(20, 70, 0.5)
+  lons <- c(-180, 180, 0.5)
+  lats <- c(-90, 90, 0.5)
   
   load_raster <- function(fpath){
     #PRMSL_meansealevel, UGRD_500mb, VGRD_500mb, UGRD_10maboveground, VGRD_10maboveground 
@@ -247,6 +247,22 @@ get_track <- function(min_date, max_date, min_time = 0,
   #' pressure on a pressure scale (the original Saffir-Simpson
   #' scale), the date, time, the maximum wind speed, and
   #' that wind speed on the Saffir-Simpson scale.  
+  #' 
+  #' @examples
+  #' # Get plot of Dec 2021 North American winter storm,
+  #' # starting in Washington, from dates Dec 12 to Dec 18,
+  #' # with the low track moving a maximum distance of 8 degrees,
+  #' # using the GFS model, starting at 12Z,
+  #' # and making sure that the track does not move westward
+  #' # and making sure that the position is not further north than
+  #' # 47 N when the latitude is between 118 W and 114 W.
+  #' tdf <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),
+  #'        model='gfs',min_time = 12, center=c(44, -120),
+  #'        center_radius=3, max_dist = 8,
+  #'        filter_callback=function(df,y,x){
+  #'          (df$x-x)>-1 &
+  #'          !(df$y<47 & between(df$x,-118,-114))
+  #'        })
   
   # Create initial variables
   date_dist <- as.numeric(max_date-min_date)
@@ -370,7 +386,7 @@ get_track <- function(min_date, max_date, min_time = 0,
 }
 
 # Plot the track from data frame
-plot_track <- function(track_df, scale='p'){
+plot_track <- function(track_df, scale='p', region="us"){
   #' Plot the low pressure track
   #'
   #' @description Get a ggplot object of the low track on a map
@@ -381,8 +397,18 @@ plot_track <- function(track_df, scale='p'){
   #' @param scale String. A string with which scale to use on the plot.
   #' Options are 'p' (pressure scale), 'ss' (Saffir-Simpson wind scale),
   #' and 'day' to show the day of the track.
-  #' 
+  #' @param region String. Region of the world to plot in.
+  #' Options are "world", "eu", and "us" (default).
+  #'
   #' @return A ggplot object of the graph.
+  #' 
+  #' @examples 
+  #' # Plot path of Cyclone Apollo (2021)
+  #' tdf <- get_track(as.Date("2021-10-24"),as.Date("2021-11-02"),
+  #'                  model='gfs',min_time = 0, center=c(35.02, 13.39),
+  #'                  center_radius=10, max_dist = 8, wind_radius=3)
+  #' plot_track(tdf,region="eu",scale="ss")
+  #' 
 
   states <- us_states() %>%
     filter(!(state_abbr %in% c("AK","HI")))
@@ -390,28 +416,24 @@ plot_track <- function(track_df, scale='p'){
   my_plot <- ggplot() + 
     geom_sf(data=world) +
     geom_sf(data=states) +
-    geom_path(data=track_df, aes(x=lon,y=lat),group=1) +
-    coord_sf(xlim=c(-140,-60),ylim=c(25,70))
+    geom_path(data=track_df, aes(x=lon,y=lat),group=1)
+  if(region == "us"){
+    my_plot <- my_plot + coord_sf(xlim=c(-140,-60),ylim=c(25,70))
+  }
+  else if(region == "eu"){
+    my_plot <- my_plot + coord_sf(xlim=c(-15,55),ylim=c(30,65))
+  }
+  else if(region == "world"){
+    my_plot <- my_plot + coord_sf(xlim=c(-180,180),ylim=c(-90,90))
+  }
   if(scale == 'p'){
     my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(p_scale)),size=2) 
   }
   else if(scale == 'ss'){
     my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(saffir_scale)),size=2)
   }
-  else{
+  else if(scale == 'day'){
     my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(day)),size=2)
   }
   return(my_plot)
-}
-
-# Example code
-if(FALSE){
-tdf <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),
-model='gfs',min_time = 12, center=c(44, -120),
-center_radius=3, max_dist = 8,
-filter_callback=function(df,y,x){
-  (df$x-x)>-1 &
-    !(df$y<47 & between(df$x,-118,-114))
-})
-plot_track(tdf, scale='day')
 }
