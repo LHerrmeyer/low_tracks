@@ -1,6 +1,7 @@
 library(pacman)
 pacman::p_load(tidyverse, raster, ncdf4, docstring,
-               fs, maps, USAboundaries, sf, rnaturalearth)
+               fs, maps, USAboundaries, sf, rnaturalearth,
+               ggrepel)
 
 fmt_lat_lon <- function(lats, lons){
   #' Format latitude and longitude data.
@@ -104,8 +105,13 @@ get_raster.gfs <- function(my_date, my_hour){
   
   file_fmt_str <- "gfs_%s_%d.nc"
   fname <- sprintf(file_fmt_str, date_str, my_hour)
-  
-  var_regex = "GRD:500|GRD:10 m above|PRMSL"
+
+  # deltaZ = max Z in 500 km radius - min Z in 500 km radius
+  # d(deltaZ)/d(ln p) 600-900 hPa
+  # d(deltaZ)/d(ln p) 300-600 hPa
+  # Variable Z represents geopotential height
+  #"HGT:900 mb|HGT:600 mb|HGT:300mb"
+  var_regex = "GRD:500|GRD:10 m above|PRMSL|HGT:900 mb|HGT:600 mb|HGT:300 mb"
   lons <- c(-180, 180, 0.5)
   lats <- c(-90, 90, 0.5)
   
@@ -116,14 +122,17 @@ get_raster.gfs <- function(my_date, my_hour){
       raster(fpath, varname="UGRD_10maboveground"),
       raster(fpath, varname="VGRD_10maboveground"),
       raster(fpath, varname="UGRD_500mb"),
-      raster(fpath, varname="VGRD_500mb")
+      raster(fpath, varname="VGRD_500mb"),
+      raster(fpath, varname="HGT_900mb"),
+      raster(fpath, varname="HGT_600mb"),
+      raster(fpath, varname="HGT_300mb")
     )
     raster_df <- as.data.frame(rasterToPoints(r))
     colnames(raster_df) <- 
-      c("x","y","MSLP","U10","V10","U500","V500")
+      c("x","y","MSLP","U10m","V10m","U500","V500","Z900","Z600","Z300")
     raster_df <- raster_df %>%
-      mutate(Wind = sqrt(U10^2 + V10^2)) %>%
-      dplyr::select(-U10,-V10)
+      mutate(Wind = sqrt(U10m^2 + V10m^2)) %>%
+      dplyr::select(-U10m,-V10m)
     return(raster_df)
   }
   
@@ -196,6 +205,7 @@ get_raster <- function(my_date, my_hour, model="hrrr"){
     return(get_raster.hrrr(my_date, my_hour))
   }
 }
+normalize <- function(x){x/sqrt(sum(x^2))}
 
 get_track <- function(min_date, max_date, min_time = 0,
                       model = "hrrr",
@@ -271,7 +281,10 @@ get_track <- function(min_date, max_date, min_time = 0,
                          lat=as.numeric(),
                          lon=as.numeric(),
                          pres=as.numeric(),
-                         wind_max=as.numeric())
+                         wind_max=as.numeric(),
+                         VTL=as.numeric(),
+                         VTU=as.numeric(),
+                         B=as.numeric())
   last_pos <- NULL
   last_wind_vec <- NULL
   # Grab and process HRRR files for each day
@@ -299,7 +312,6 @@ get_track <- function(min_date, max_date, min_time = 0,
       # (we don't want a global minimum on the other side
       # of the map).
       if(!is.null(last_pos)){
-        normalize <- function(x){x/sqrt(sum(x^2))}
         lat_last <- as.numeric(last_pos[2])
         lon_last <- as.numeric(last_pos[1])
         # Filter low position using callback
@@ -328,6 +340,75 @@ get_track <- function(min_date, max_date, min_time = 0,
         filter(rank(MSLP, ties.method="first") == 1)
       xy <- as.numeric(min_entry[c(1,2)])
       pres <- min_entry[3]
+      # Find neg_VTL, neg_VTU, and B if applicable
+      VTL <- NA
+      VTU <- NA
+      B <- NA
+      # Find movement of storm vector to calculate B.
+      mov_vec <- NULL
+      if(!is.null(last_pos)){
+        lat_last <- as.numeric(last_pos[2])
+        lon_last <- as.numeric(last_pos[1])
+        mov_vec <- normalize(c(xy[1] - lat_last, xy[2] - lon_last))
+      }
+      print(min_entry)
+      if("Z600" %in% colnames(min_entry)){
+        print("Z600 found")
+        # Find nearby points within 500 km (~4 degs)
+        nearby <- raster_df %>%
+          filter(x - xy[1] < 10, y - xy[2] < 10) %>%
+          filter(sqrt((x - xy[1])^2 + (y - xy[2])^2) <= 4.5) %>%
+          mutate(diff_x = x - xy[1], diff_y = y - xy[2])
+        # Find delta Z (zmax-zmin within the radius)
+        deltaZ_300 <- max(nearby$Z300) - min(nearby$Z300)
+        deltaZ_600 <- max(nearby$Z600) - min(nearby$Z600)
+        deltaZ_900 <- max(nearby$Z900) - min(nearby$Z900)
+        
+        # Calculate B (asymmetry)
+        #tdf <- get_track(as.Date("2021-10-24"),as.Date("2021-11-02"),
+        #model='gfs',min_time = 0, center=c(35.02, 13.39),
+        #center_radius=10, max_dist = 8, wind_radius=3)
+        # Right means right of current storm motion
+        # U wind is X-axis, Positive U wind is from the west
+        
+        # If we do not know the storm direction,
+        # assume the storm direction is the same as the 500mb wind
+        if(is.null(mov_vec)){
+          mov_vec <- normalize(c(-min_entry$U500,-min_entry$V500))
+        }
+
+        # Get right-hand perpendicular vector: (x,y) -> (-y, x)
+        right_vector <- c(-mov_vec[2], mov_vec[1])
+        # Where the dot product with the right hand vector is positive, the
+        # vector must also be on the right side
+        nearby_directions <- nearby %>% 
+          rowwise() %>%
+          mutate(dot = normalize(c(diff_x,diff_y)) %*%
+                   right_vector) %>%
+          ungroup()
+        left <- nearby_directions %>% filter(dot <= 0)
+        right <- nearby_directions %>% filter(dot > 0)
+        
+        right_600_900_thik_mean <- right %>%
+          mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
+        left_600_900_thik_mean <- left %>%
+          mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
+        
+        h <- ifelse(xy[1] >= 0, -1, 1)
+        B <- h * (right_600_900_thik_mean - left_600_900_thik_mean)
+        # Calculate Thermal Wind
+        # Thermal Wind is derivative of depth intensity wrt pressure
+        # Bigger deltaZ meanas bigger differnce between highest Z and lowest,
+        # meaning more intense low. This intensity is also known as
+        # height perturbation.
+        # If intensity increases wrt pressure (meaning higher pressure = more intensity),
+        # this is warm core. Lower pressures are at higher altitudes (1000mb is near surface, 300mb is near stratosphere, etc)
+        # Using a central finite difference
+        # Find vertical wind in lower levels
+        VTL <- (deltaZ_600 - deltaZ_900) / (log(600) - log(900))
+        # Find vertical wind in upper levels
+        VTU <- (deltaZ_300 - deltaZ_600) / (log(300) - log(600))
+      }
       # Find max wind within radius of maximum winds
       wind_raster <- raster_df %>%
         filter((abs(x - xy[1]) < wind_radius) &
@@ -343,7 +424,10 @@ get_track <- function(min_date, max_date, min_time = 0,
                                          as.numeric(xy[2]),
                                          as.numeric(xy[1]),
                                          pres,
-                                         max_wind)
+                                         max_wind,
+                                         VTL,
+                                         VTU,
+                                         B)
       # Save last position and last wind vector
       # for sanity checks of next low position.
       last_pos <- xy
@@ -385,6 +469,11 @@ get_track <- function(min_date, max_date, min_time = 0,
   return(track_df)
 }
 
+# Ida (2021)
+#ida <- get_track(as.Date("2021-08-28"),as.Date("2021-09-03"),
+#model='gfs',min_time = 0, center=c(22.5, -83),
+#center_radius=3, max_dist = 6)
+
 # Plot the track from data frame
 plot_track <- function(track_df, scale='p', region="us"){
   #' Plot the low pressure track
@@ -404,10 +493,10 @@ plot_track <- function(track_df, scale='p', region="us"){
   #' 
   #' @examples 
   #' # Plot path of Cyclone Apollo (2021)
-  #' tdf <- get_track(as.Date("2021-10-24"),as.Date("2021-11-02"),
+  #' apollo <- get_track(as.Date("2021-10-24"),as.Date("2021-11-02"),
   #'                  model='gfs',min_time = 0, center=c(35.02, 13.39),
   #'                  center_radius=10, max_dist = 8, wind_radius=3)
-  #' plot_track(tdf,region="eu",scale="ss")
+  #' plot_track(apollo,region="eu",scale="ss")
   #' 
 
   states <- us_states() %>%
@@ -435,5 +524,28 @@ plot_track <- function(track_df, scale='p', region="us"){
   else if(scale == 'day'){
     my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(day)),size=2)
   }
+  return(my_plot)
+}
+
+plot_phase <- function(track_df, B=FALSE){
+  my_plot <- NULL
+  if(!B){
+    my_plot <- ggplot(data=track_df, aes(x=VTL,y=VTU)) +
+      geom_hline(yintercept=0) +
+      ylim(c(-600, 300))
+  }
+  else{
+    my_plot <- ggplot(data=track_df, aes(x=VTL, y=B)) +
+      geom_hline(yintercept=10) +
+      ylim(c(-25, 125))
+  }
+  my_plot <- my_plot +
+    theme_bw() +
+    geom_text(data=track_df %>% filter(hour == 0),
+              aes(label=day),size=6, color="black") +
+    xlim(c(-600,300)) +
+    geom_vline(xintercept=0) +
+    geom_point(data=track_df, aes(color=as.factor(day)),size=3) +
+    geom_path(data=track_df, color="red")
   return(my_plot)
 }
