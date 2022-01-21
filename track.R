@@ -259,8 +259,8 @@ get_track <- function(min_date, max_date, min_time = 0,
   #' that wind speed on the Saffir-Simpson scale.  
   #' 
   #' @examples
-  #' # Get plot of Dec 2021 North American winter storm,
-  #' # starting in Washington, from dates Dec 12 to Dec 18,
+  #' # Get plot of Dec 2021 North American winter storm (Winter Storm Bankston),
+  #' # starting in Washington, from dates Dec 13 to Dec 18,
   #' # with the low track moving a maximum distance of 8 degrees,
   #' # using the GFS model, starting at 12Z,
   #' # and making sure that the track does not move westward
@@ -349,7 +349,8 @@ get_track <- function(min_date, max_date, min_time = 0,
       if(!is.null(last_pos)){
         lat_last <- as.numeric(last_pos[2])
         lon_last <- as.numeric(last_pos[1])
-        mov_vec <- normalize(c(xy[1] - lat_last, xy[2] - lon_last))
+        # Remember, x is lon, y is lat.
+        mov_vec <- normalize(c(xy[1] - lon_last, xy[2] - lat_last))
       }
       print(min_entry)
       if("Z600" %in% colnames(min_entry)){
@@ -358,13 +359,14 @@ get_track <- function(min_date, max_date, min_time = 0,
         nearby <- raster_df %>%
           filter(x - xy[1] < 10, y - xy[2] < 10) %>%
           filter(sqrt((x - xy[1])^2 + (y - xy[2])^2) <= 4.5) %>%
-          mutate(diff_x = x - xy[1], diff_y = y - xy[2])
+          mutate(delta_x = x - xy[1], delta_y = y - xy[2])
         # Find delta Z (zmax-zmin within the radius)
         deltaZ_300 <- max(nearby$Z300) - min(nearby$Z300)
         deltaZ_600 <- max(nearby$Z600) - min(nearby$Z600)
         deltaZ_900 <- max(nearby$Z900) - min(nearby$Z900)
         
         # Calculate B (asymmetry)
+        # The right side of an ET cyclone is the warm sector
         #tdf <- get_track(as.Date("2021-10-24"),as.Date("2021-11-02"),
         #model='gfs',min_time = 0, center=c(35.02, 13.39),
         #center_radius=10, max_dist = 8, wind_radius=3)
@@ -374,27 +376,40 @@ get_track <- function(min_date, max_date, min_time = 0,
         # If we do not know the storm direction,
         # assume the storm direction is the same as the 500mb wind
         if(is.null(mov_vec)){
+          print("Movement vector null")
           mov_vec <- normalize(c(-min_entry$U500,-min_entry$V500))
         }
 
-        # Get right-hand perpendicular vector: (x,y) -> (-y, x)
-        right_vector <- c(-mov_vec[2], mov_vec[1])
+        # Get right-hand (clockwise) perpendicular vector: (x,y) -> (y, -x)
+        # Eg (2, 1) -> (1, -2)
+        # I probable have something backwards somewhere
+        # https://stackoverflow.com/questions/4780119/2d-euclidean-vector-rotations
+        right_vector <- c(mov_vec[2], -mov_vec[1])
         # Where the dot product with the right hand vector is positive, the
         # vector must also be on the right side
         nearby_directions <- nearby %>% 
           rowwise() %>%
-          mutate(dot = normalize(c(diff_x,diff_y)) %*%
+          mutate(direction_dot = normalize(c(delta_x,delta_y)) %*%
                    right_vector) %>%
           ungroup()
-        left <- nearby_directions %>% filter(dot <= 0)
-        right <- nearby_directions %>% filter(dot > 0)
+        print(nearby_directions %>% 
+                mutate(thik = Z600-Z900) %>%
+                dplyr::select(x,y,MSLP,thik,delta_x,delta_y,direction_dot),n=200)
+        left <- nearby_directions %>% filter(direction_dot < 0)
+        right <- nearby_directions %>% filter(direction_dot > 0)
         
         right_600_900_thik_mean <- right %>%
           mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
         left_600_900_thik_mean <- left %>%
           mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
         
-        h <- ifelse(xy[1] >= 0, -1, 1)
+        print(paste0("Location:",xy))
+        print(paste0("Movement vector",mov_vec))
+        print(paste0("Left Thik mean: ",left_600_900_thik_mean))
+        print(paste0("Right Thik mean: ", right_600_900_thik_mean))
+        print(paste0("Diff:",right_600_900_thik_mean-left_600_900_thik_mean))
+        
+        h <- ifelse(xy[2] >= 0, 1, -1)
         B <- h * (right_600_900_thik_mean - left_600_900_thik_mean)
         # Calculate Thermal Wind
         # Thermal Wind is derivative of depth intensity wrt pressure
@@ -465,6 +480,27 @@ get_track <- function(min_date, max_date, min_time = 0,
   # Add a day column
   track_df$day = as.numeric(format(track_df$Date, format="%d"))
   
+  # Determine if storm is extratropical, subtropical, or tropical
+  if(TRUE){
+    num <- 4
+    track_df <-
+      track_df %>%
+      mutate(B = as.numeric(B),
+             VTL = as.numeric(VTL),
+             VTU = as.numeric(VTU)) %>%
+      mutate(
+        Bs = zoo::rollmean(B, k=num, fill=NA),
+        VTLs = zoo::rollmean(VTL, k=num, fill=NA),
+        VTUs = zoo::rollmean(VTU, k=num, fill=NA)
+      ) %>%
+      mutate(type = case_when(
+        VTLs < 0 & VTUs < 0 ~ "ET",
+        VTLs > 0 & VTUs < 0 ~ "SU",
+        VTLs > 0 & VTUs > 0 ~ "TC",
+        VTLs < 0 & VTUs > 0 ~ "ET",
+        TRUE ~ "ET"
+      ))
+  }
   # Return the tracking data
   return(track_df)
 }
@@ -527,7 +563,14 @@ plot_track <- function(track_df, scale='p', region="us"){
   return(my_plot)
 }
 
-plot_phase <- function(track_df, B=FALSE){
+plot_phase <- function(track_df, B=FALSE, smooth=FALSE){
+  num <- 4
+  if(smooth){
+    track_df <- track_df %>% 
+      mutate(B = zoo::rollmean(B, k=num, fill=NA),
+             VTL = zoo::rollmean(VTL, k=num, fill=NA),
+             VTU = zoo::rollmean(VTU, k=num, fill=NA))
+  }
   my_plot <- NULL
   if(!B){
     my_plot <- ggplot(data=track_df, aes(x=VTL,y=VTU)) +
@@ -541,8 +584,8 @@ plot_phase <- function(track_df, B=FALSE){
   }
   my_plot <- my_plot +
     theme_bw() +
-    geom_text(data=track_df %>% filter(hour == 0),
-              aes(label=day),size=6, color="black") +
+    geom_text_repel(data=track_df %>% filter(hour == 12),
+              aes(label=day),size=4, color="black") +
     xlim(c(-600,300)) +
     geom_vline(xintercept=0) +
     geom_point(data=track_df, aes(color=as.factor(day)),size=3) +
