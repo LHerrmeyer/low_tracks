@@ -15,7 +15,8 @@ ida <- get_track(as.Date("2021-08-26"),as.Date("2021-09-05"),
 # Values of B greater than 10 indicate an asymmetric (frontal) structure,
 # values less than 10 indicate a symmetric (nonfrontal) cyclone structure.
 # Values of -VTL greater than 0 indicate a lower level warm core, while
-# values of 
+# values less than 0 indicate a lower level cold core.
+# values of -VTU indicate the same as -VTL except for upper levels.
 plot_phase(ida, T, smooth=4)
 ```
 
@@ -63,7 +64,7 @@ Compare this track to the [track From Wikipedia](https://en.wikipedia.org/wiki/2
 - Add documentation for phase space
 
 ## To-do
-- Export to HURDAT or other common format.
+- Export to [HURDAT](https://www.aoml.noaa.gov/hrd/data_sub/newHURDAT.html).
 
 ## Possible future items
 - NCEP model
