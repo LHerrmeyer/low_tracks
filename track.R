@@ -563,13 +563,36 @@ plot_track <- function(track_df, scale='p', region="us"){
   return(my_plot)
 }
 
-plot_phase <- function(track_df, B=FALSE, smooth=FALSE){
-  num <- 4
-  if(smooth){
+
+plot_phase <- function(track_df, B=FALSE, smooth=0){
+  #' A function to plot a phase diagram of the cyclone.
+  #' 
+  #' @description Plots a phase diagram of a cyclone. The possible phase diagrams
+  #' plot either a) Asymmetry (B) vs. lower level (900 hPa - 600 hPa) thermal wind 
+  #' (low level warm vs cold core) (-VTL) or b) Upper level (600 hPa - 300 hPa) 
+  #' thermal wind (upper level warm vs cold core) (-VTU) vs lower level
+  #' (900 hPa - 600 hPa) thermal wind (lower level warm vs cold core) (-VTL).
+  #' It is important to know that currently only the GFS model supports
+  #' 
+  #' @examples
+  #' 
+  #' # Get phase diagrams for Hurricane Ida, and smooth it with
+  #' # a 24-hr moving average (or 4 observations every 6 hours)
+  #' # Get the track data for Hurricane Ida
+  #' ida <- get_track(as.Date("2021-08-26"),as.Date("2021-09-05"),
+  #'   model='gfs',min_time = 0, center=c(15.8, -74.8),
+  #'   center_radius=3, max_dist = 6)
+  #' # Plot a VTU vs VTL chart.
+  #' plot_phase(ida, smooth = 4)
+  #' # Plot a B vs VTL chart.
+  #' plot_phase(ida, B = TRUE, smooth = 4)
+  #' 
+  #' # Get phase diagram for Cyclone Apollo (2021)
+  if(smooth > 0){
     track_df <- track_df %>% 
-      mutate(B = zoo::rollmean(B, k=num, fill=NA),
-             VTL = zoo::rollmean(VTL, k=num, fill=NA),
-             VTU = zoo::rollmean(VTU, k=num, fill=NA))
+      mutate(B = zoo::rollmean(B, k=smooth, fill=NA),
+             VTL = zoo::rollmean(VTL, k=smooth, fill=NA),
+             VTU = zoo::rollmean(VTU, k=smooth, fill=NA))
   }
   my_plot <- NULL
   if(!B){
