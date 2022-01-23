@@ -90,7 +90,8 @@ get_raster.gfs <- function(my_date, my_hour){
   #' @param my_hour Hour to retrieve model frm.
   #'
   #' @return A data.frame of the raster grabbed from the model
-  #' with MSLP, 500mb wind U and V directions, and 10m wind speed.
+  #' with MSLP, 500mb wind U and V directions, 10m wind speed,
+  #' and geopotential heights for the 900mb, 600mb, and 300mb levels.
   
   # https://www.ncei.noaa.gov/data/global-forecast-system/access/grid-004-0.5-degree/analysis/201008/20100809/gfs_4_20100809_0000_000.grb2
   base_url <- "https://www.ncei.noaa.gov/data/global-forecast-system/access/grid-004-0.5-degree/analysis/"
@@ -266,13 +267,14 @@ get_track <- function(min_date, max_date, min_time = 0,
   #' # and making sure that the track does not move westward
   #' # and making sure that the position is not further north than
   #' # 47 N when the latitude is between 118 W and 114 W.
-  #' tdf <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),
+  #' bankston.gfs <- get_track(as.Date("2021-12-13"),as.Date("2021-12-18"),
   #'        model='gfs',min_time = 12, center=c(44, -120),
   #'        center_radius=3, max_dist = 8,
   #'        filter_callback=function(df,y,x){
   #'          (df$x-x)>-1 &
   #'          !(df$y<47 & between(df$x,-118,-114))
   #'        })
+  #'        
   
   # Create initial variables
   date_dist <- as.numeric(max_date-min_date)
@@ -352,9 +354,7 @@ get_track <- function(min_date, max_date, min_time = 0,
         # Remember, x is lon, y is lat.
         mov_vec <- normalize(c(xy[1] - lon_last, xy[2] - lat_last))
       }
-      print(min_entry)
       if("Z600" %in% colnames(min_entry)){
-        print("Z600 found")
         # Find nearby points within 500 km (~4 degs)
         nearby <- raster_df %>%
           filter(x - xy[1] < 10, y - xy[2] < 10) %>%
@@ -376,7 +376,6 @@ get_track <- function(min_date, max_date, min_time = 0,
         # If we do not know the storm direction,
         # assume the storm direction is the same as the 500mb wind
         if(is.null(mov_vec)){
-          print("Movement vector null")
           mov_vec <- normalize(c(-min_entry$U500,-min_entry$V500))
         }
 
@@ -392,25 +391,18 @@ get_track <- function(min_date, max_date, min_time = 0,
           mutate(direction_dot = normalize(c(delta_x,delta_y)) %*%
                    right_vector) %>%
           ungroup()
-        print(nearby_directions %>% 
-                mutate(thik = Z600-Z900) %>%
-                dplyr::select(x,y,MSLP,thik,delta_x,delta_y,direction_dot),n=200)
         left <- nearby_directions %>% filter(direction_dot < 0)
         right <- nearby_directions %>% filter(direction_dot > 0)
         
+        # Calculate the mean thicknesses on each side. A larger thickness
+        # means a larger temperature.
         right_600_900_thik_mean <- right %>%
           mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
         left_600_900_thik_mean <- left %>%
           mutate(thik = Z600 - Z900) %>% pull(thik) %>% mean()
-        
-        print(paste0("Location:",xy))
-        print(paste0("Movement vector",mov_vec))
-        print(paste0("Left Thik mean: ",left_600_900_thik_mean))
-        print(paste0("Right Thik mean: ", right_600_900_thik_mean))
-        print(paste0("Diff:",right_600_900_thik_mean-left_600_900_thik_mean))
-        
         h <- ifelse(xy[2] >= 0, 1, -1)
         B <- h * (right_600_900_thik_mean - left_600_900_thik_mean)
+        
         # Calculate Thermal Wind
         # Thermal Wind is derivative of depth intensity wrt pressure
         # Bigger deltaZ meanas bigger differnce between highest Z and lowest,
@@ -493,22 +485,18 @@ get_track <- function(min_date, max_date, min_time = 0,
         VTLs = zoo::rollmean(VTL, k=num, fill=NA),
         VTUs = zoo::rollmean(VTU, k=num, fill=NA)
       ) %>%
-      mutate(type = case_when(
+      mutate(cyclone_type = case_when(
         VTLs < 0 & VTUs < 0 ~ "ET",
         VTLs > 0 & VTUs < 0 ~ "SU",
         VTLs > 0 & VTUs > 0 ~ "TC",
         VTLs < 0 & VTUs > 0 ~ "ET",
         TRUE ~ "ET"
-      ))
+      )) %>%
+      mutate(cyclone_type = factor(cyclone_type, levels = c("ET","SU","TC")))
   }
   # Return the tracking data
   return(track_df)
 }
-
-# Ida (2021)
-#ida <- get_track(as.Date("2021-08-28"),as.Date("2021-09-03"),
-#model='gfs',min_time = 0, center=c(22.5, -83),
-#center_radius=3, max_dist = 6)
 
 # Plot the track from data frame
 plot_track <- function(track_df, scale='p', region="us"){
@@ -533,15 +521,26 @@ plot_track <- function(track_df, scale='p', region="us"){
   #'                  model='gfs',min_time = 0, center=c(35.02, 13.39),
   #'                  center_radius=10, max_dist = 8, wind_radius=3)
   #' plot_track(apollo,region="eu",scale="ss")
-  #' 
+  #'
+  #' # Plot path of Hurricane Ida (2021)
+  #' ida <- get_track(as.Date("2021-08-26"),as.Date("2021-09-05"),
+  #'   model='gfs',min_time = 0, center=c(15.8, -74.8),
+  #'   center_radius=3, max_dist = 6)
+  #' plot_track(ida,region="us",scale="p")
 
+  # Create the initial plot
   states <- us_states() %>%
     filter(!(state_abbr %in% c("AK","HI")))
   world <- ne_countries(returnclass='sf')
-  my_plot <- ggplot() + 
-    geom_sf(data=world) +
-    geom_sf(data=states) +
-    geom_path(data=track_df, aes(x=lon,y=lat),group=1)
+  # We set inherit.aes to false or else the geom_sf will try to find
+  # the cyclone_type column where it does not exist.
+  my_plot <- ggplot(track_df, aes(shape=cyclone_type)) + 
+    geom_sf(data=world, inherit.aes = FALSE) +
+    geom_sf(data=states, inherit.aes = FALSE) +
+    geom_path(aes(x=lon,y=lat),group=1) +
+    scale_shape_manual(name="", values = c(17,15,16), drop=FALSE)
+  
+  # Set plot limits based on region
   if(region == "us"){
     my_plot <- my_plot + coord_sf(xlim=c(-140,-60),ylim=c(25,70))
   }
@@ -551,14 +550,16 @@ plot_track <- function(track_df, scale='p', region="us"){
   else if(region == "world"){
     my_plot <- my_plot + coord_sf(xlim=c(-180,180),ylim=c(-90,90))
   }
+  
+  # Set points based on scale
   if(scale == 'p'){
-    my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(p_scale)),size=2) 
+    my_plot <- my_plot + geom_point(aes(x=lon,y=lat,color=as.factor(p_scale)),size=2) 
   }
   else if(scale == 'ss'){
-    my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(saffir_scale)),size=2)
+    my_plot <- my_plot + geom_point(aes(x=lon,y=lat,color=as.factor(saffir_scale)),size=2)
   }
   else if(scale == 'day'){
-    my_plot <- my_plot + geom_point(data=track_df, aes(x=lon,y=lat,color=as.factor(day)),size=2)
+    my_plot <- my_plot + geom_point(aes(x=lon,y=lat,color=as.factor(day)),size=2)
   }
   return(my_plot)
 }
@@ -574,8 +575,23 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
   #' (900 hPa - 600 hPa) thermal wind (lower level warm vs cold core) (-VTL).
   #' It is important to know that currently only the GFS model supports
   #' 
-  #' @examples
+  #' @param track_df Data.frame. Data.frame of cyclone data, downloaded from
+  #' get_track. Currently, only the GFS model can be used for phase information.
+  #' @param B Logical. Whether or not to plot a B vs -VTL plot (TRUE) or a -VTU vs 
+  #' -VTL plot (FALSE). Defaults to FALSE.
+  #' @param smooth Numeric. How many observations (in 6 hour periods for GFS and
+  #' HRRR models) to smooth the phase diagram with a moving average. Defaults to
+  #' 0 (meaning to not smooth).
   #' 
+  #' @return A ggplot object of the phase graph of the cyclone.
+  #' 
+  #' @references Hart, R. E. (2003).
+  #' A Cyclone Phase Space Derived from Thermal Wind and Thermal Asymmetry, 
+  #' Monthly Weather Review, 131(4), 585-616. 
+  #' Retrieved Jan 23, 2022, from 
+  #' https://journals.ametsoc.org/view/journals/mwre/131/4/1520-0493_2003_131_0585_acpsdf_2.0.co_2.xml
+  #' 
+  #' @examples
   #' # Get phase diagrams for Hurricane Ida, and smooth it with
   #' # a 24-hr moving average (or 4 observations every 6 hours)
   #' # Get the track data for Hurricane Ida
@@ -586,8 +602,7 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
   #' plot_phase(ida, smooth = 4)
   #' # Plot a B vs VTL chart.
   #' plot_phase(ida, B = TRUE, smooth = 4)
-  #' 
-  #' # Get phase diagram for Cyclone Apollo (2021)
+
   if(smooth > 0){
     track_df <- track_df %>% 
       mutate(B = zoo::rollmean(B, k=smooth, fill=NA),
@@ -598,12 +613,14 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
   if(!B){
     my_plot <- ggplot(data=track_df, aes(x=VTL,y=VTU)) +
       geom_hline(yintercept=0) +
-      ylim(c(-600, 300))
+      ylim(c(-600, 300)) +
+      ylab("-VTU (600 hPa-300 hPa Thermal Wind)")
   }
   else{
     my_plot <- ggplot(data=track_df, aes(x=VTL, y=B)) +
       geom_hline(yintercept=10) +
-      ylim(c(-25, 125))
+      ylim(c(-25, 125)) +
+      ylab("B (900 hPa-600 hPa Storm Relative Thickness Symmetry)")
   }
   my_plot <- my_plot +
     theme_bw() +
@@ -612,6 +629,7 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
     xlim(c(-600,300)) +
     geom_vline(xintercept=0) +
     geom_point(data=track_df, aes(color=as.factor(day)),size=3) +
-    geom_path(data=track_df, color="red")
+    geom_path(data=track_df, color="red") +
+    xlab("-VTL (900 hPa-600 hPa Thermal Wind)")
   return(my_plot)
 }
