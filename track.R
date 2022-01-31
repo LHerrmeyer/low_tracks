@@ -473,27 +473,49 @@ get_track <- function(min_date, max_date, min_time = 0,
   track_df$day = as.numeric(format(track_df$Date, format="%d"))
   
   # Determine if storm is extratropical, subtropical, or tropical
-  if(TRUE){
-    num <- 4
-    track_df <-
-      track_df %>%
-      mutate(B = as.numeric(B),
-             VTL = as.numeric(VTL),
-             VTU = as.numeric(VTU)) %>%
-      mutate(
-        Bs = zoo::rollmean(B, k=num, fill=NA),
-        VTLs = zoo::rollmean(VTL, k=num, fill=NA),
-        VTUs = zoo::rollmean(VTU, k=num, fill=NA)
-      ) %>%
-      mutate(cyclone_type = case_when(
-        VTLs < 0 & VTUs < 0 ~ "ET",
-        VTLs > 0 & VTUs < 0 ~ "SU",
-        VTLs > 0 & VTUs > 0 ~ "TC",
-        VTLs < 0 & VTUs > 0 ~ "ET",
-        TRUE ~ "ET"
-      )) %>%
-      mutate(cyclone_type = factor(cyclone_type, levels = c("ET","SU","TC")))
+  num <- 4
+  track_df <-
+    track_df %>%
+    mutate(B = as.numeric(B),
+           VTL = as.numeric(VTL),
+           VTU = as.numeric(VTU)) %>%
+    mutate(
+      Bs = zoo::rollmean(B, k=num, fill=NA),
+      VTLs = zoo::rollmean(VTL, k=num, fill=NA),
+      VTUs = zoo::rollmean(VTU, k=num, fill=NA)
+    ) %>%
+    mutate(cyclone_type = case_when(
+      VTLs < 0 & VTUs < 0 ~ "ET",
+      VTLs > 0 & VTUs < 0 ~ "SU",
+      VTLs > 0 & VTUs > 0 ~ "TC",
+      VTLs < 0 & VTUs > 0 ~ "ET",
+      TRUE ~ "ET"
+    )) %>%
+    mutate(cyclone_type = factor(cyclone_type, levels = c("ET","SU","TC")))
+  # Make sure we don't have any false positive subtropical cyclones
+  # (transitioning from tropical)
+  track_df <- track_df %>% mutate(cyclone_type = as.character(cyclone_type))
+  for(i in 2:nrow(track_df)){
+    row <- track_df[i, ]
+    last_row <- track_df[i-1, ]
+    row$cyclone_type = ifelse(row$cyclone_type == "SU" & last_row$cyclone_type == "TC",
+                              "TC",row$cyclone_type)
+    track_df[i, ] = row
   }
+  track_df <- track_df %>%
+    mutate(cyclone_type = factor(cyclone_type, levels = c("ET","SU","TC")))
+  # Set a column for HURDAT format of cyclone type/intensity
+  # https://www.aoml.noaa.gov/hrd/data_sub/newHURDAT.html
+  track_df <- track_df %>%
+    mutate(hurdat_scale = case_when(
+      saffir_scale %in% c("TC1","TC2","TC3","TC4","TC5") ~ "HU",
+      cyclone_type == "ET" ~ "EX",
+      cyclone_type == "SU" & saffir_scale == "TD" ~ "SD",
+      cyclone_type == "SU" & saffir_scale == "TS" ~ "SS",
+      cyclone_type == "TC" & saffir_scale == "TD" ~ "TD",
+      cyclone_type == "TC" & saffir_scale == "TS" ~ "TS",
+      TRUE ~ as.character(NA)
+    ))
   # Return the tracking data
   return(track_df)
 }
@@ -639,4 +661,59 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
     geom_path(data=track_df, color="red") +
     xlab("-VTL (900 hPa-600 hPa Thermal Wind)")
   return(my_plot)
+}
+
+# $ track --format hurdat2 --input /mnt/c/Users/Logan/Desktop/stat/low_tracks/apollo.txt --output ./apollo.png --extra 1 --res 2700
+# to_hurdat(apollo2, "apollo.txt")
+to_hurdat <- function(track_df, filename){
+  # Function to format coordinates
+  # Example: 45.5N or 83.2W
+  fmt_crd <- function(crd, type){
+    hemisphere <- "N"
+    if(type == "lat"){
+      hemisphere <- ifelse(crd >= 0, "N", "S")
+    }
+    else if(type == "lon"){
+      hemisphere <- ifelse(crd >= 0, "E", "W")
+    }
+    return(str_c(
+      format(abs(round(crd,1)), nsmall=1),
+      hemisphere
+    ))
+  }
+  len <- str_pad(nrow(track_df), 2, "left", 0)
+  # Create the header
+  rows <- c(sprintf("AL012021,%s,     %02d,",
+                  str_pad("UNNAMED", 19, "left", " "),
+                  nrow(track_df)))
+  # Create the rows
+  for(i in 1:nrow(track_df)){
+    row <- track_df[i,]
+    # Create the initial row text with the data
+    row_txt <- str_c(
+      format(row$Date,"%Y%m%d"), # Date
+      sprintf(" %02d00",row$hour), # Time (e.g. 1200)
+      "  ", # Code for special entries (landfall, intensity peak)
+      str_pad(row$hurdat_scale,3,"left"), # Status on HURDAT2 Scale,
+      str_pad(fmt_crd(row$lat, "lat"),6,"left"), # Latitude
+      str_pad(fmt_crd(row$lon, "lon"),7,"left"), # Longitude
+      str_pad(  # Wind speed in knots (converted from m/s),
+        round(row$wind_max * 1.94)
+        ,4,"left"),
+      str_pad(round(row$pres),5,"left"), # Minimum Sea Level Pressure (hPa)
+    sep=",")
+    # Make sure to add the missing fields
+    # These fields are mainly wind speeds in each sector
+    row_txt <- str_c(
+      row_txt,
+      ",",
+      strrep(" -999,",12)
+    )
+    rows <- c(rows, row_txt)
+  }
+  # This extra line is needed for wptc-track to recognize it
+  rows <- c(rows, "AL022021,            UNNAMED,      1,")
+  file_conn <- file(filename, "wb") # Open in bin mode so we can use LF not CRLF
+  writeLines(rows, file_conn, sep="\n")
+  close(file_conn)
 }
