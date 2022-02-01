@@ -665,7 +665,19 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
 
 # $ track --format hurdat2 --input /mnt/c/Users/Logan/Desktop/stat/low_tracks/apollo.txt --output ./apollo.png --extra 1 --res 2700
 # to_hurdat(apollo2, "apollo.txt")
-to_hurdat <- function(track_df, filename){
+to_hurdat2 <- function(track_df, filename){
+  #' A function to convert a track data.frame into a HURDAT2 format file.
+  #' 
+  #' @description Writes the track of the cyclone given in `track_df` to a HURDAT2 
+  #' format file with a path specified in `filename`.
+  #' 
+  #' @param track_df Data.frame. A data.frame of a cyclone path
+  #' @param filename String. A path of the file to write to.
+  #' 
+  #' @return None
+  #' 
+  #' @examples
+  
   # Function to format coordinates
   # Example: 45.5N or 83.2W
   fmt_crd <- function(crd, type){
