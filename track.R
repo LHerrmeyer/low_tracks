@@ -663,8 +663,6 @@ plot_phase <- function(track_df, B=FALSE, smooth=0){
   return(my_plot)
 }
 
-# $ track --format hurdat2 --input /mnt/c/Users/Logan/Desktop/stat/low_tracks/apollo.txt --output ./apollo.png --extra 1 --res 2700
-# to_hurdat(apollo2, "apollo.txt")
 to_hurdat2 <- function(track_df, filename){
   #' A function to convert a track data.frame into a HURDAT2 format file.
   #' 
@@ -677,6 +675,15 @@ to_hurdat2 <- function(track_df, filename){
   #' @return None
   #' 
   #' @examples
+  #' # Get the path of Hurricane Ida (2021)
+  #' ida <- get_track(as.Date("2021-08-26"),as.Date("2021-09-05"),
+  #'   model='gfs',min_time = 0, center=c(15.8, -74.8),
+  #'   center_radius=3, max_dist = 6)
+  #' # Save the path to a file
+  #' to_hurdat2(ida, "/mypath/ida.txt")
+  #' # Generate an image (with the wptc-track program, not included)
+  #' # This should be run in the system shell, assuming Linux:
+  #' # ./track --format hurdat2 --input /mypath/ida --output ./ida.png --extra 1 --res 2700
   
   # Function to format coordinates
   # Example: 45.5N or 83.2W

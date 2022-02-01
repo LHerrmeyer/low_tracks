@@ -62,10 +62,9 @@ Compare this track to the [track From Wikipedia](https://en.wikipedia.org/wiki/2
 - Add HRRR
 - Add more examples, with screenshots
 - Add documentation for phase space
-
-## To-do
 - Export to [HURDAT](https://www.aoml.noaa.gov/hrd/data_sub/newHURDAT.html).
 - Documentation for HURDAT
+
 
 ## Possible future items
 - NCEP model
